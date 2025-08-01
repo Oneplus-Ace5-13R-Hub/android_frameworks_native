@@ -31,7 +31,6 @@
 #include <input/InputConsumerNoResampling.h>
 #include <input/PrintTools.h>
 #include <input/TraceTools.h>
-#include <log/log.h>
 
 namespace android {
 
@@ -324,10 +323,10 @@ void InputConsumerNoResampling::reportTimeline(int32_t inputEventId, nsecs_t gpu
 
 nsecs_t InputConsumerNoResampling::popConsumeTime(uint32_t seq) {
     auto it = mConsumeTimes.find(seq);
-    if (it == mConsumeTimes.end()) {
-        ALOGE("Could not find consume time for seq=%" PRIu32, seq);
-        return 0;
-    }
+    // Consume time will be missing if either 'finishInputEvent' is called twice, or if it was
+    // called for the wrong (synthetic?) input event. Either way, it is a bug that should be fixed.
+    LOG_ALWAYS_FATAL_IF(it == mConsumeTimes.end(), "Could not find consume time for seq=%" PRIu32,
+                        seq);
     nsecs_t consumeTime = it->second;
     mConsumeTimes.erase(it);
     return consumeTime;
