@@ -15,6 +15,10 @@
  */
 
 #include <algorithm>
+#include <chrono>
+#include <fstream>
+
+#include <android-base/properties.h>
 
 #include <common/FlagManager.h>
 #include "Client.h"
@@ -179,9 +183,20 @@ RefreshRateOverlay::RefreshRateOverlay(ConstructorTag, FpsRange fpsRange,
             .setLayer(mSurfaceControl->get(), INT32_MAX - 2)
             .setTrustedOverlay(mSurfaceControl->get(), true)
             .apply();
+
+    startPanelRefreshPoller();
 }
 
 RefreshRateOverlay::~RefreshRateOverlay() {
+    if (mPanelPollThread.joinable()) {
+        {
+            std::lock_guard lock(mPollMutex);
+            mPollStop = true;
+        }
+        mPollCondition.notify_all();
+        mPanelPollThread.join();
+    }
+
     for (const auto& pair : mBufferCache) {
         for (const sp<GraphicBuffer>& buffer : pair.second) {
             android::removeBufferFromLocalCache(buffer);
@@ -280,33 +295,107 @@ void RefreshRateOverlay::setLayerStack(ui::LayerStack stack) {
     createTransaction().setLayerStack(mSurfaceControl->get(), stack).apply();
 }
 
+void RefreshRateOverlay::startPanelRefreshPoller() {
+    const std::string nodePath =
+            base::GetProperty("ro.surface_flinger.panel_refresh_rate_node", "");
+    if (nodePath.empty()) return;
+
+    mPanelPollThread = std::thread([this, nodePath] { panelRefreshPollLoop(nodePath); });
+}
+
+void RefreshRateOverlay::panelRefreshPollLoop(const std::string& nodePath) {
+    constexpr auto kPollPeriod = std::chrono::milliseconds(500);
+    int lastShownRate = -1;
+
+    while (true) {
+        {
+            std::unique_lock lock(mPollMutex);
+            if (mPollCondition.wait_for(lock, kPollPeriod, [this] { return mPollStop; })) {
+                return;
+            }
+        }
+
+        int panelRate = -1;
+        if (std::ifstream node(nodePath); node) {
+            std::string line;
+            if (std::getline(node, line)) {
+                if (line.find("fps: ") == 0) {
+                    float parsedFps = 0.0f;
+                    if (sscanf(line.c_str(), "fps: %f", &parsedFps) == 1) {
+                        panelRate = static_cast<int>(parsedFps + 0.5f);
+                    }
+                } else {
+                    int parsedRate = 0;
+                    if (sscanf(line.c_str(), "%d", &parsedRate) == 1) {
+                        panelRate = parsedRate;
+                    }
+                }
+            }
+        }
+
+        std::lock_guard lock(mMutex);
+
+        if (panelRate <= 0) {
+            // Node unreadable or no measurement (e.g. variable refresh disabled in
+            // the kernel): the panel scans at the mode's vsync rate, so show that.
+            if (!mRefreshRate) continue;
+            panelRate = mRefreshRate->getIntValue();
+        }
+
+        if (panelRate == lastShownRate) continue;
+        lastShownRate = panelRate;
+        mPanelRefreshRate = Fps::fromValue(static_cast<float>(panelRate));
+
+        // Only pushed when the value changed: a settled overlay produces no new
+        // frames, so displaying a low rate does not itself wake the panel.
+        const auto buffer = getOrCreateBuffers(*mPanelRefreshRate,
+                                               mRenderFps.value_or(0_Hz),
+                                               mIsVrrIdle)[mFrame];
+        createTransaction().setBuffer(mSurfaceControl->get(), buffer).apply();
+    }
+}
+
 void RefreshRateOverlay::changeRefreshRate(Fps refreshRate, Fps renderFps) {
+    std::lock_guard lock(mMutex);
     mRefreshRate = refreshRate;
     mRenderFps = renderFps;
-    const auto buffer = getOrCreateBuffers(refreshRate, renderFps, mIsVrrIdle)[mFrame];
+    // The poller owns the displayed refresh rate when active; keep showing the
+    // real panel rate across mode switches instead of flashing the vsync rate.
+    const Fps shownRate =
+            usesPanelRefreshRate() ? mPanelRefreshRate.value_or(refreshRate) : refreshRate;
+    const auto buffer = getOrCreateBuffers(shownRate, renderFps, mIsVrrIdle)[mFrame];
     createTransaction().setBuffer(mSurfaceControl->get(), buffer).apply();
 }
 
 void RefreshRateOverlay::onVrrIdle(bool idle) {
+    std::lock_guard lock(mMutex);
     mIsVrrIdle = idle;
     if (!mRefreshRate || !mRenderFps) return;
 
-    const auto buffer = getOrCreateBuffers(*mRefreshRate, *mRenderFps, mIsVrrIdle)[mFrame];
+    const Fps shownRate =
+            usesPanelRefreshRate() ? mPanelRefreshRate.value_or(*mRefreshRate) : *mRefreshRate;
+    const auto buffer = getOrCreateBuffers(shownRate, *mRenderFps, mIsVrrIdle)[mFrame];
     createTransaction().setBuffer(mSurfaceControl->get(), buffer).apply();
 }
 
 void RefreshRateOverlay::changeRenderRate(Fps renderFps) {
+    std::lock_guard lock(mMutex);
     if (mFeatures.test(Features::RenderRate) && mRefreshRate) {
         mRenderFps = renderFps;
-        const auto buffer = getOrCreateBuffers(*mRefreshRate, renderFps, mIsVrrIdle)[mFrame];
+        const Fps shownRate =
+                usesPanelRefreshRate() ? mPanelRefreshRate.value_or(*mRefreshRate) : *mRefreshRate;
+        const auto buffer = getOrCreateBuffers(shownRate, renderFps, mIsVrrIdle)[mFrame];
         createTransaction().setBuffer(mSurfaceControl->get(), buffer).apply();
     }
 }
 
 void RefreshRateOverlay::animate() {
+    std::lock_guard lock(mMutex);
     if (!mFeatures.test(Features::Spinner) || !mRefreshRate) return;
 
-    const auto& buffers = getOrCreateBuffers(*mRefreshRate, *mRenderFps, mIsVrrIdle);
+    const Fps shownRate =
+            usesPanelRefreshRate() ? mPanelRefreshRate.value_or(*mRefreshRate) : *mRefreshRate;
+    const auto& buffers = getOrCreateBuffers(shownRate, *mRenderFps, mIsVrrIdle);
     mFrame = (mFrame + 1) % buffers.size();
     const auto buffer = buffers[mFrame];
     createTransaction().setBuffer(mSurfaceControl->get(), buffer).apply();

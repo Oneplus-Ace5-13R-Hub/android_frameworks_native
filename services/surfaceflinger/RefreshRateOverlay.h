@@ -18,6 +18,10 @@
 
 #include "Utils/OverlayUtils.h"
 
+#include <condition_variable>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include <ftl/flags.h>
@@ -66,6 +70,14 @@ public:
 private:
     bool initCheck() const;
 
+    // If the ro.surface_flinger.panel_refresh_rate_node sysprop names a readable
+    // sysfs node reporting the panel's real self-refresh rate (e.g. an LTPO TE
+    // counter), a poller thread owns the displayed number instead of the vsync
+    // rate reported by mode changes.
+    void startPanelRefreshPoller();
+    void panelRefreshPollLoop(const std::string& nodePath);
+    bool usesPanelRefreshRate() const { return mPanelPollThread.joinable(); }
+
     using Buffers = std::vector<sp<GraphicBuffer>>;
 
     static Buffers draw(int refreshRate, int renderFps, bool idle, SkColor,
@@ -96,6 +108,19 @@ private:
     std::optional<Fps> mRenderFps;
     bool mIsVrrIdle = false;
     size_t mFrame = 0;
+
+    // Real panel self-refresh rate from the polled sysfs node; when present it
+    // is what drawNumber shows as the refresh rate.
+    std::optional<Fps> mPanelRefreshRate;
+
+    // Guards the buffer cache, the displayed state above and transaction
+    // application, since the poller thread updates the overlay concurrently
+    // with SurfaceFlinger's main thread.
+    std::mutex mMutex;
+    std::thread mPanelPollThread;
+    std::mutex mPollMutex;
+    std::condition_variable mPollCondition;
+    bool mPollStop = false;
 
     const FpsRange mFpsRange; // For color interpolation.
     const ftl::Flags<Features> mFeatures;
