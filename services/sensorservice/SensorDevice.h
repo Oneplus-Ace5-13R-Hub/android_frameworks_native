@@ -77,7 +77,10 @@ public:
     ssize_t poll(sensors_event_t* buffer, size_t count);
     void writeWakeLockHandled(uint32_t count);
 
+    // Exported for the OPLUS fusion-light engine (libsensorserviceextimpl.so).
+    __attribute__((visibility("default")))
     status_t activate(void* ident, int handle, int enabled);
+    __attribute__((visibility("default")))
     status_t batch(void* ident, int handle, int flags, int64_t samplingPeriodNs,
                    int64_t maxBatchReportLatencyNs);
     // Call batch with timeout zero instead of calling setDelay() for newer devices.
@@ -109,6 +112,7 @@ public:
 
     bool isReconnecting() const { return mHalWrapper->mReconnecting; }
 
+    __attribute__((visibility("default")))
     bool isSensorActive(int handle) const;
 
     // To update the BatchParams of a SensorEventConnection when the mic toggle changes its state

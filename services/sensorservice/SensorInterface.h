@@ -96,6 +96,9 @@ public:
 class VirtualSensor : public BaseSensor
 {
 public:
+    // Exported for the OPLUS fusion-light engine (its virtual sensor derives
+    // from VirtualSensor; the lib is -fvisibility=hidden).
+    __attribute__((visibility("default")))
     VirtualSensor();
     virtual bool isVirtual() const override { return true; }
 protected:

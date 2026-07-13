@@ -509,13 +509,19 @@ private:
     String8 getSensorName(int handle) const;
     String8 getSensorStringType(int handle) const;
     bool isVirtualSensor(int handle) const;
+    __attribute__((visibility("default")))
     std::shared_ptr<SensorInterface> getSensorInterfaceFromHandle(int handle) const;
     int getDeviceIdFromHandle(int handle) const;
     bool isWakeUpSensor(int type) const;
     void recordLastValueLocked(sensors_event_t const* buffer, size_t count);
     static void sortEventBuffer(sensors_event_t* buffer, size_t count);
+    __attribute__((visibility("default")))
     bool registerSensor(std::shared_ptr<SensorInterface> sensor, bool isDebug = false,
                         bool isVirtual = false, int deviceId = RuntimeSensor::DEFAULT_DEVICE_ID);
+    // OPLUS fusion-light engine callbacks (libsensorserviceextimpl.so).
+    __attribute__((visibility("default"))) bool hasSensorRecord(int handle);
+    __attribute__((visibility("default"))) void onUidIdleForce(unsigned int uid);
+    __attribute__((visibility("default"))) void setSensorStateForTemporarily(int handle, bool state);
     bool registerVirtualSensor(std::shared_ptr<SensorInterface> sensor, bool isDebug = false);
     bool registerDynamicSensorLocked(std::shared_ptr<SensorInterface> sensor, bool isDebug = false);
     bool unregisterDynamicSensorLocked(int handle);
