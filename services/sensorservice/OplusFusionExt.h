@@ -14,6 +14,7 @@
 #pragma once
 
 #include <hardware/sensors.h>
+#include <utils/Errors.h>
 
 namespace android {
 
@@ -23,5 +24,11 @@ class SensorService;
 // Loads the fusion engine and lets it register its virtual light sensor via
 // SensorService::registerSensor. Safe to call unconditionally.
 void loadOplusFusionSensors(SensorService* service, const sensor_t* list, size_t count);
+
+// SensorDevice hooks — drive the engine's SensorDeviceExt activate/batch path
+// (activateInternal / CWB screenshot monitor). No-op when fusion is disabled.
+bool oplusFusionActive();
+status_t oplusFusionActivate(int handle, int enabled);
+status_t oplusFusionBatch(int handle, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs);
 
 }  // namespace android

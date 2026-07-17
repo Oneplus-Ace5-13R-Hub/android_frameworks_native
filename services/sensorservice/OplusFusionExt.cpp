@@ -30,12 +30,23 @@ namespace android {
 //     [6] batchFusionSensor(int, int64_t, int64_t)
 //     [7] getFusionSensorsList()
 static constexpr int kFactory_createSensorServiceExt = 0;
+static constexpr int kFactory_createSensorDeviceExt = 3;
 static constexpr int kSvcExt_registerOplusCustomizeSensor = 0;
+static constexpr int kDeviceExt_activateFusionSensor = 5;
+static constexpr int kDeviceExt_batchFusionSensor = 6;
 
 static const char kEngine[] = "libsensorserviceextimpl.so";
 static const char kProp[] = "persist.alpha.fusion_light";
 
+// Exported by the engine; sets [OplusSensorServiceUtils+0x3fb] via setFusionLightStatue
+// when it sees qti.sensor.high_pwm_rgb in the HAL list. Must run before registration.
+static const char kOnSensorFoundSym[] =
+        "_ZN7android20SensorServiceExtImpl13onSensorFoundEPK8sensor_tm";
+
 using CreateExtendedFactoryFn = void* (*)();
+using OnSensorFoundFn = void (*)(void*, const sensor_t*, size_t);
+
+static void* gDeviceExt = nullptr;
 
 // Minimal base the engine's ExtendedFactory derives from. The engine references
 // only SensorServiceExtFactory::{ctor,dtor}; the object is vtable-only (8B) and
@@ -56,6 +67,29 @@ static Ret callVirtual(void* obj, int index, Args... args) {
     void** vtable = *reinterpret_cast<void***>(obj);
     using Fn = Ret (*)(void*, Args...);
     return reinterpret_cast<Fn>(vtable[index])(obj, args...);
+}
+
+bool oplusFusionActive() {
+    return base::GetBoolProperty(kProp, false) && gDeviceExt != nullptr;
+}
+
+status_t oplusFusionActivate(int handle, int enabled) {
+    if (!oplusFusionActive()) {
+        return NO_ERROR;
+    }
+    const int ret = callVirtual<int, int, bool>(
+            gDeviceExt, kDeviceExt_activateFusionSensor, handle, enabled != 0);
+    ALOGI("fusion: activateFusionSensor(handle=0x%x, enabled=%d) -> %d", handle, enabled, ret);
+    return ret;
+}
+
+status_t oplusFusionBatch(int handle, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs) {
+    if (!oplusFusionActive()) {
+        return NO_ERROR;
+    }
+    return callVirtual<int, int, int64_t, int64_t>(
+            gDeviceExt, kDeviceExt_batchFusionSensor, handle, samplingPeriodNs,
+            maxBatchReportLatencyNs);
 }
 
 void loadOplusFusionSensors(SensorService* service, const sensor_t* list, size_t count) {
@@ -85,6 +119,22 @@ void loadOplusFusionSensors(SensorService* service, const sensor_t* list, size_t
     void* svcExt = callVirtual<void*>(factory, kFactory_createSensorServiceExt);
     if (svcExt == nullptr) {
         ALOGE("fusion: createSensorServiceExt returned null");
+        return;
+    }
+
+    auto onSensorFound = reinterpret_cast<OnSensorFoundFn>(dlsym(handle, kOnSensorFoundSym));
+    if (onSensorFound == nullptr) {
+        ALOGE("fusion: onSensorFound not found: %s", dlerror());
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        onSensorFound(svcExt, list, i);
+    }
+    ALOGI("fusion: onSensorFound driven for %zu sensors", count);
+
+    gDeviceExt = callVirtual<void*>(factory, kFactory_createSensorDeviceExt);
+    if (gDeviceExt == nullptr) {
+        ALOGE("fusion: createSensorDeviceExt returned null");
         return;
     }
 

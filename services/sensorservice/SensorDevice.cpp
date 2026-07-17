@@ -37,6 +37,7 @@
 
 #include "AidlSensorHalWrapper.h"
 #include "HidlSensorHalWrapper.h"
+#include "OplusFusionExt.h"
 #include "android/hardware/sensors/2.0/types.h"
 #include "android/hardware/sensors/2.1/types.h"
 #include "convertV2_1.h"
@@ -468,6 +469,10 @@ void SensorDevice::autoDisable(void* ident, int handle) {
 status_t SensorDevice::activate(void* ident, int handle, int enabled) {
     if (mHalWrapper == nullptr) return NO_INIT;
 
+    if (oplusFusionActive()) {
+        oplusFusionActivate(handle, enabled);
+    }
+
     Mutex::Autolock _l(mLock);
     return activateLocked(ident, handle, enabled);
 }
@@ -582,6 +587,10 @@ status_t SensorDevice::batch(void* ident, int handle, int flags, int64_t samplin
              "SensorDevice::batch: ident=%p, handle=0x%08x, flags=%d, period_ns=%" PRId64
              " timeout=%" PRId64,
              ident, handle, flags, samplingPeriodNs, maxBatchReportLatencyNs);
+
+    if (oplusFusionActive()) {
+        oplusFusionBatch(handle, samplingPeriodNs, maxBatchReportLatencyNs);
+    }
 
     Mutex::Autolock _l(mLock);
     return batchLocked(ident, handle, flags, samplingPeriodNs, maxBatchReportLatencyNs);
