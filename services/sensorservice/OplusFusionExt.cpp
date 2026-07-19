@@ -10,6 +10,7 @@
 
 #include <android-base/properties.h>
 #include <dlfcn.h>
+#include <inttypes.h>
 #include <log/log.h>
 
 #include "SensorService.h"
@@ -77,6 +78,24 @@ status_t oplusFusionActivate(int handle, int enabled) {
     if (!oplusFusionActive()) {
         return NO_ERROR;
     }
+    // DeviceExt::activateFusionSensor only latches NextGen flags for:
+    //   0x3e9 + gate[0x3fb] -> mIsFusionLightActivated
+    //   0x3f0 + gate[0x3fc] -> mIsFusionRGBActivated
+    // FusionLightSensor::activate also pokes SensorDevice with 0x3e9 (and
+    // historically ExtImpl poked -1 when the raw handle was never captured).
+    // Drive both virtual handles whenever we see either signal so the RGB
+    // path latches — otherwise activateInternal keeps mIsFusionRGBActivated=0
+    // and lux stays dead.
+    const bool driveFusion = (handle < 0) || (handle == 0x3e9) || (handle == 0x3f0);
+    if (driveFusion) {
+        const int ret3e9 = callVirtual<int, int, bool>(
+                gDeviceExt, kDeviceExt_activateFusionSensor, 0x3e9, enabled != 0);
+        const int ret3f0 = callVirtual<int, int, bool>(
+                gDeviceExt, kDeviceExt_activateFusionSensor, 0x3f0, enabled != 0);
+        ALOGI("fusion: activateFusionSensor(0x3e9)=%d (0x3f0)=%d enabled=%d [via handle=0x%x]",
+              ret3e9, ret3f0, enabled, handle);
+        return (ret3e9 == 0 || ret3f0 == 0) ? NO_ERROR : ret3e9;
+    }
     const int ret = callVirtual<int, int, bool>(
             gDeviceExt, kDeviceExt_activateFusionSensor, handle, enabled != 0);
     ALOGI("fusion: activateFusionSensor(handle=0x%x, enabled=%d) -> %d", handle, enabled, ret);
@@ -86,6 +105,15 @@ status_t oplusFusionActivate(int handle, int enabled) {
 status_t oplusFusionBatch(int handle, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs) {
     if (!oplusFusionActive()) {
         return NO_ERROR;
+    }
+    // Mirror activate: when the engine passes -1 (raw handle never captured),
+    // also drive the virtual fusion sensor's batch path.
+    if (handle < 0) {
+        const int ret3e9 = callVirtual<int, int, int64_t, int64_t>(
+                gDeviceExt, kDeviceExt_batchFusionSensor, 0x3e9, samplingPeriodNs,
+                maxBatchReportLatencyNs);
+        ALOGI("fusion: batchFusionSensor(handle=0x3e9 [via -1], period=%" PRId64 ") -> %d",
+              samplingPeriodNs, ret3e9);
     }
     return callVirtual<int, int, int64_t, int64_t>(
             gDeviceExt, kDeviceExt_batchFusionSensor, handle, samplingPeriodNs,

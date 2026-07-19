@@ -471,6 +471,12 @@ status_t SensorDevice::activate(void* ident, int handle, int enabled) {
 
     if (oplusFusionActive()) {
         oplusFusionActivate(handle, enabled);
+        // ExtImpl may pass handle=-1 (QCOM type lookup returns side_panel).
+        // FusionLightSensor captures high_pwm correctly; keep remap as a net.
+        if (handle < 0) {
+            handle = 0x010006a5;  // qti.sensor.high_pwm_rgb on dodge
+            ALOGI("fusion: remapped activate(-1) -> high_pwm handle 0x%x", handle);
+        }
     }
 
     Mutex::Autolock _l(mLock);
@@ -590,6 +596,13 @@ status_t SensorDevice::batch(void* ident, int handle, int flags, int64_t samplin
 
     if (oplusFusionActive()) {
         oplusFusionBatch(handle, samplingPeriodNs, maxBatchReportLatencyNs);
+        // Same -1 remapping as activate(): ExtImpl never captured the raw
+        // high_pwm handle (looks up side_panel type on QCOM). FusionLightSensor
+        // captures correctly; keep remap as a safety net for ExtImpl paths.
+        if (handle < 0) {
+            handle = 0x010006a5;  // qti.sensor.high_pwm_rgb on dodge
+            ALOGI("fusion: remapped batch(-1) -> high_pwm handle 0x%x", handle);
+        }
     }
 
     Mutex::Autolock _l(mLock);
