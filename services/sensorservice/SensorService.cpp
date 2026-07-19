@@ -2281,6 +2281,15 @@ status_t SensorService::enable(const sp<SensorEventConnection>& connection,
         if (sensor->isVirtual()) {
             mActiveVirtualSensors.emplace(handle);
         }
+        // OPLUS fusion sensors are ColorOS-built VirtualSensor subclasses;
+        // isVirtual() resolves through a cross-ABI vtable and is not reliable
+        // (boots where it returned false left process() undriven and the ALS
+        // dead). Force them into virtual dispatch.
+        if (oplusFusionActive() && (handle == 0x3e9 || handle == 0x3f0)) {
+            ALOGI("fusion: enable 0x%x isVirtual=%d — forcing virtual dispatch", handle,
+                  sensor->isVirtual());
+            mActiveVirtualSensors.emplace(handle);
+        }
 
         // There was no SensorRecord for this sensor which means it was previously disabled. Mark
         // the recent event as stale to ensure that the previous event is not sent to a client. This
