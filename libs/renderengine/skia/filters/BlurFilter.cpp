@@ -89,9 +89,11 @@ const SkString kEffectSource_BlurFilter_MixEffect(R"(
 )");
 
 // Liquid Glass: a lens at the edge of rounded blur regions (refraction, a little dispersion,
-// a lit rim), plus the user's tint. Full-screen backdrops only take the tint.
+// a lit rim), plus the user's tint. Full-screen backdrops only take the tint. The rim bends the
+// sharp scene; bending only the blur barely shows.
 static const SkString kGlassEffectSource(R"(
     uniform shader blurred;
+    uniform shader sharp;
     uniform float4 rect;
     uniform float cornerRadius;
     uniform float liquid;
@@ -120,16 +122,20 @@ static const SkString kGlassEffectSource(R"(
             float bend = edge * edge * edge;
             float2 uv = xy - n * (bend * band * refraction * 0.9);
             float split = bend * refraction * 4.0;
-            color = float3(blurred.eval(uv).rgb);
-            color.r = float(blurred.eval(uv + n * split).r);
-            color.b = float(blurred.eval(uv - n * split).b);
+            float3 soft = float3(blurred.eval(uv).rgb);
+            soft.r = float(blurred.eval(uv + n * split).r);
+            soft.b = float(blurred.eval(uv - n * split).b);
+            float3 crisp = float3(sharp.eval(uv).rgb);
+            crisp.r = float(sharp.eval(uv + n * split).r);
+            crisp.b = float(sharp.eval(uv - n * split).b);
+            color = mix(soft, crisp, smoothstep(0.35, 1.0, edge) * 0.8);
             float luma = dot(color, float3(0.2126, 0.7152, 0.0722));
             color = mix(float3(luma), color, 1.2) * 1.03;
             color = mix(color, tint.rgb, tint.a) * (1.0 - dim);
-            float rim = 1.0 - smoothstep(0.0, 1.5 + 2.5 * refraction, -d);
+            float rim = 1.0 - smoothstep(0.0, 1.5 + 3.5 * refraction, -d);
             float light = dot(n, lightDir);
-            color += rim * (0.06 + 0.34 * max(light, 0.0) + 0.14 * max(-light, 0.0)) *
-                    (0.5 + 0.5 * refraction) + edge * edge * 0.04;
+            color += rim * (0.08 + 0.5 * max(light, 0.0) + 0.18 * max(-light, 0.0)) *
+                    (0.5 + 0.5 * refraction) + edge * edge * (0.04 + 0.1 * max(light, 0.0));
         } else {
             color = float3(blurred.eval(xy).rgb);
             color = mix(color, tint.rgb, tint.a) * (1.0 - dim);
@@ -146,6 +152,25 @@ static sk_sp<SkRuntimeEffect> makeGlassEffect() {
         ALOGE("Liquid Glass effect failed to compile: %s", error.c_str());
     }
     return effect;
+}
+
+// The unblurred input, mapped onto the canvas.
+static sk_sp<SkShader> makeInputShader(const SkCanvas* canvas, const sk_sp<SkImage>& input,
+                                       const SkRect& blurRect, const float zoomScale,
+                                       const SkSamplingOptions& sampling) {
+    // For sampling Skia's API expects the inverse of what logically seems appropriate. In this
+    // case you might expect the matrix to simply be the canvas matrix.
+    SkMatrix inputMatrix;
+    if (!canvas->getTotalMatrix().invert(&inputMatrix)) {
+        ALOGE("matrix was unable to be inverted");
+    }
+    if (zoomScale != 1.0f) {
+        inputMatrix.preTranslate(
+                blurRect.width() * (1 - zoomScale) / 2.0f,
+                blurRect.height() * (1 - zoomScale) / 2.0f);
+        inputMatrix.preScale(zoomScale, zoomScale);
+    }
+    return input->makeShader(SkTileMode::kMirror, SkTileMode::kMirror, sampling, inputMatrix);
 }
 
 static SkMatrix getShaderTransform(const SkCanvas* canvas, const SkRect& blurRect,
@@ -207,7 +232,8 @@ uint32_t BlurFilter::scaleRadius(uint32_t radius) {
 
 sk_sp<SkShader> BlurFilter::makeGlassShader(const SkCanvas* canvas, const SkRRect& effectRegion,
                                             const sk_sp<SkShader>& blurShader,
-                                            const sk_sp<SkImage>& input) {
+                                            const sk_sp<SkImage>& input, const SkRect& blurRect,
+                                            const float zoomScale) {
     if (!mGlassEffect) {
         return nullptr;
     }
@@ -236,6 +262,10 @@ sk_sp<SkShader> BlurFilter::makeGlassShader(const SkCanvas* canvas, const SkRRec
 
     SkRuntimeShaderBuilder builder(mGlassEffect);
     builder.child("blurred") = blurShader;
+    builder.child("sharp") = liquid && input
+            ? makeInputShader(canvas, input, blurRect, zoomScale,
+                              SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone))
+            : blurShader;
     builder.uniform("rect") = SkV4{rect.fLeft, rect.fTop, rect.fRight, rect.fBottom};
     builder.uniform("cornerRadius") = corner;
     builder.uniform("liquid") = liquid ? 1.0f : 0.0f;
@@ -272,29 +302,16 @@ void BlurFilter::drawBlurRegion(SkCanvas* canvas, const SkRRect& effectRegion,
     if (blurRadius < mMaxCrossFadeRadius) {
         LOG_THREAD_STATE_AND_CRASH_IF(!input);
 
-        // For sampling Skia's API expects the inverse of what logically seems appropriate. In this
-        // case you might expect the matrix to simply be the canvas matrix.
-        SkMatrix inputMatrix;
-        if (!canvas->getTotalMatrix().invert(&inputMatrix)) {
-            ALOGE("matrix was unable to be inverted");
-        }
-        if (zoomScale != 1.0f) {
-            inputMatrix.preTranslate(
-                    blurRect.width() * (1 - zoomScale) / 2.0f,
-                    blurRect.height() * (1 - zoomScale) / 2.0f);
-            inputMatrix.preScale(zoomScale, zoomScale);
-        }
-
         SkRuntimeShaderBuilder blurBuilder(mMixEffect);
         blurBuilder.child("blurredInput") = blurShader;
         blurBuilder.child("originalInput") =
-                input->makeShader(SkTileMode::kMirror, SkTileMode::kMirror, linearSampling,
-                                  inputMatrix);
+                makeInputShader(canvas, input, blurRect, zoomScale, linearSampling);
 
         blurBuilder.uniform("mixFactor") = blurRadius / mMaxCrossFadeRadius;
 
         paint.setShader(blurBuilder.makeShader());
-    } else if (auto glassShader = makeGlassShader(canvas, effectRegion, blurShader, input)) {
+    } else if (auto glassShader = makeGlassShader(canvas, effectRegion, blurShader, input,
+                                                  blurRect, zoomScale)) {
         paint.setShader(std::move(glassShader));
     } else {
         paint.setShader(blurShader);

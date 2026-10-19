@@ -97,7 +97,8 @@ private:
 
     sk_sp<SkShader> makeGlassShader(const SkCanvas* canvas, const SkRRect& effectRegion,
                                     const sk_sp<SkShader>& blurShader,
-                                    const sk_sp<SkImage>& input);
+                                    const sk_sp<SkImage>& input, const SkRect& blurRect,
+                                    float zoomScale);
 
     const sk_sp<SkRuntimeEffect> mGlassEffect;
     GlassProperty mGlassMaterial{"persist.sys.rr.glass.material", 1};
