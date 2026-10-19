@@ -36,6 +36,44 @@
 
 #include "RuntimeEffectManager.h"
 
+#include <renderengine/RrGlass.h>
+
+#include <atomic>
+
+namespace android::renderengine::rrglass {
+
+static constexpr float kDefaultLightX = -0.5f;
+static constexpr float kDefaultLightY = -0.866f;
+
+static std::atomic<float> sLightX{kDefaultLightX};
+static std::atomic<float> sLightY{kDefaultLightY};
+static std::atomic<uint32_t> sLightSerial{0};
+static std::atomic<nsecs_t> sLastDraw{0};
+
+void setLight(float x, float y) {
+    const float length = std::sqrt(x * x + y * y);
+    if (length > 0.001f) {
+        x /= length;
+        y /= length;
+    } else {
+        x = kDefaultLightX;
+        y = kDefaultLightY;
+    }
+    sLightX.store(x);
+    sLightY.store(y);
+    sLightSerial.fetch_add(1);
+}
+
+uint32_t lightSerial() {
+    return sLightSerial.load();
+}
+
+bool drawnRecently(nsecs_t now) {
+    return now - sLastDraw.load() < ms2ns(500);
+}
+
+} // namespace android::renderengine::rrglass
+
 namespace android {
 namespace renderengine {
 namespace skia {
@@ -60,6 +98,7 @@ static const SkString kGlassEffectSource(R"(
     uniform float refraction;
     uniform float dim;
     uniform float4 tint;
+    uniform float2 lightDir;
 
     float boxSdf(float2 p, float2 halfSize, float r) {
         float2 q = abs(p) - halfSize + float2(r);
@@ -88,7 +127,7 @@ static const SkString kGlassEffectSource(R"(
             color = mix(float3(luma), color, 1.2) * 1.03;
             color = mix(color, tint.rgb, tint.a) * (1.0 - dim);
             float rim = 1.0 - smoothstep(0.0, 1.5 + 2.5 * refraction, -d);
-            float light = dot(n, float2(-0.5, -0.866));
+            float light = dot(n, lightDir);
             color += rim * (0.06 + 0.34 * max(light, 0.0) + 0.14 * max(-light, 0.0)) *
                     (0.5 + 0.5 * refraction) + edge * edge * 0.04;
         } else {
@@ -183,6 +222,9 @@ sk_sp<SkShader> BlurFilter::makeGlassShader(const SkCanvas* canvas, const SkRRec
     if (!liquid && dim == 0.0f && !accent) {
         return nullptr;
     }
+    if (liquid) {
+        rrglass::sLastDraw.store(systemTime());
+    }
 
     const SkRect& rect = effectRegion.rect();
     float corner = 0.0f;
@@ -199,6 +241,7 @@ sk_sp<SkShader> BlurFilter::makeGlassShader(const SkCanvas* canvas, const SkRRec
     builder.uniform("liquid") = liquid ? 1.0f : 0.0f;
     builder.uniform("refraction") = std::clamp(mGlassRefraction.get(), 0, 100) / 100.0f;
     builder.uniform("dim") = dim;
+    builder.uniform("lightDir") = SkV2{rrglass::sLightX.load(), rrglass::sLightY.load()};
     builder.uniform("tint") = SkV4{static_cast<float>((color >> 16) & 0xff) / 255.0f,
                                    static_cast<float>((color >> 8) & 0xff) / 255.0f,
                                    static_cast<float>(color & 0xff) / 255.0f,

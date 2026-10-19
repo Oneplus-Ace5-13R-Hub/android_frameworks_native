@@ -107,6 +107,10 @@ struct DisplaySettings {
 
     // For now, meaningful primarily when the TonemappingStrategy is Local
     float targetHdrSdrRatio = 1.f;
+
+    // Liquid Glass light serial (rrglass::lightSerial()), so a moved light isn't served from
+    // the client composition cache.
+    uint32_t glassLightSerial = 0;
 };
 
 static inline bool operator==(const DisplaySettings& lhs, const DisplaySettings& rhs) {
@@ -118,7 +122,8 @@ static inline bool operator==(const DisplaySettings& lhs, const DisplaySettings&
             lhs.deviceHandlesColorTransform == rhs.deviceHandlesColorTransform &&
             lhs.orientation == rhs.orientation &&
             lhs.targetLuminanceNits == rhs.targetLuminanceNits &&
-            lhs.dimmingStage == rhs.dimmingStage && lhs.renderIntent == rhs.renderIntent;
+            lhs.dimmingStage == rhs.dimmingStage && lhs.renderIntent == rhs.renderIntent &&
+            lhs.glassLightSerial == rhs.glassLightSerial;
 }
 
 static const char* orientation_to_string(uint32_t orientation) {

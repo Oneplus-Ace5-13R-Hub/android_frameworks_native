@@ -87,6 +87,7 @@
 #include <private/gui/SyncFeatures.h>
 #include <processgroup/processgroup.h>
 #include <renderengine/RenderEngine.h>
+#include <renderengine/RrGlass.h>
 #include <renderengine/impl/ExternalTexture.h>
 #include <scheduler/FrameTargeter.h>
 #include <statslog_surfaceflinger_bootstrap.h>
@@ -7367,6 +7368,9 @@ void SurfaceFlinger::updateColorMatrixLocked() {
     }
 }
 
+// Liquid Glass light direction (RR), sent by system_server's tilt sensor.
+constexpr uint32_t kRrGlassLightCode = 1100;
+
 status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
 #pragma clang diagnostic push
 #pragma clang diagnostic error "-Wswitch-enum"
@@ -7481,7 +7485,7 @@ status_t SurfaceFlinger::CheckTransactCodeCredentials(uint32_t code) {
     }
     // Numbers from 1000 to 1047 are currently used for backdoors. The code
     // in onTransact verifies that the user is root, and has access to use SF.
-    if (code >= 1000 && code <= 1047) {
+    if ((code >= 1000 && code <= 1047) || code == kRrGlassLightCode) {
         ALOGV("Accessing SurfaceFlinger through backdoor code: %u", code);
         return OK;
     }
@@ -8037,6 +8041,27 @@ status_t SurfaceFlinger::onTransact(uint32_t code, const Parcel& data, Parcel* r
                                                      Duration::fromNs(minSfNs),
                                                      Duration::fromNs(maxSfNs),
                                                      Duration::fromNs(appDurationNs));
+                return NO_ERROR;
+            }
+            case kRrGlassLightCode: {
+                float x = 0.f;
+                float y = 0.f;
+                if (data.readFloat(&x) != NO_ERROR || data.readFloat(&y) != NO_ERROR) {
+                    return BAD_VALUE;
+                }
+                renderengine::rrglass::setLight(x, y);
+                // A still screen only shows the new light if the glass is drawn again.
+                if (renderengine::rrglass::drawnRecently(systemTime())) {
+                    static_cast<void>(
+                            mScheduler->schedule([this]() FTL_FAKE_GUARD(kMainThreadContext) {
+                                const auto& displays = FTL_FAKE_GUARD(mStateLock, mDisplays);
+                                for (const auto& [_, display] : displays) {
+                                    auto& state = display->getCompositionDisplay()->editState();
+                                    state.dirtyRegion.set(state.displaySpace.getBoundsAsRect());
+                                }
+                                scheduleComposite(FrameHint::kActive);
+                            }));
+                }
                 return NO_ERROR;
             }
         }
