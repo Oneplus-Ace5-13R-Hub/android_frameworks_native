@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <android-base/properties.h>
+
 #include <SkCanvas.h>
 #include <SkImage.h>
 #include <SkRuntimeEffect.h>
@@ -66,6 +68,9 @@ public:
 
     float getMaxCrossFadeRadius() const;
 
+    // Liquid Glass: the requested radius scaled by the user's blur strength.
+    uint32_t scaleRadius(uint32_t radius);
+
     virtual void preallocateBuffers(SkiaGpuContext* context, ui::Size size) {}
     virtual bool areBuffersPreallocated(const SkiaGpuContext* context, ui::Size displaySize) const {
         return true;
@@ -78,6 +83,29 @@ private:
 
     // Optional blend used for crossfade only if mMaxCrossFadeRadius > 0
     const sk_sp<SkRuntimeEffect> mMixEffect;
+
+    // Liquid Glass (Remixer), set through the persist.sys.rr.glass.* mirrors.
+    struct GlassProperty {
+        GlassProperty(const char* name, int defaultValue);
+        int get();
+
+        android::base::CachedProperty property;
+        const int fallback;
+        int value;
+        bool read = false;
+    };
+
+    sk_sp<SkShader> makeGlassShader(const SkCanvas* canvas, const SkRRect& effectRegion,
+                                    const sk_sp<SkShader>& blurShader,
+                                    const sk_sp<SkImage>& input);
+
+    const sk_sp<SkRuntimeEffect> mGlassEffect;
+    GlassProperty mGlassMaterial{"persist.sys.rr.glass.material", 1};
+    GlassProperty mGlassBlur{"persist.sys.rr.glass.blur", 50};
+    GlassProperty mGlassTint{"persist.sys.rr.glass.tint", 0};
+    GlassProperty mGlassRefraction{"persist.sys.rr.glass.refraction", 60};
+    GlassProperty mGlassAccentTint{"persist.sys.rr.glass.accent_tint", 0};
+    GlassProperty mGlassAccentColor{"persist.sys.rr.glass.accent_color", 0xE02437};
 };
 
 } // namespace skia

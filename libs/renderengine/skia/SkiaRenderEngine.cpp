@@ -1145,7 +1145,8 @@ void SkiaRenderEngine::drawLayersInternal(
                     // invocations have been made for a particular blurred SkImage.
                     temporaryBlurredImage =
                             mBlurFilter->generateTemporaryImage(context, display,
-                                                                layer.backgroundBlurRadius,
+                                                                mBlurFilter->scaleRadius(
+                                                                        layer.backgroundBlurRadius),
                                                                 blurInput, blurRect);
 
                     mBlurFilter->drawBlurRegion(canvas, bounds, layer.backgroundBlurRadius,
@@ -1197,7 +1198,9 @@ void SkiaRenderEngine::drawLayersInternal(
                         {
                             SFTRACE_NAME("BlurRegion");
                             temporaryBlurredImage =
-                                    mBlurFilter->generateTemporaryImage(context, display, radius,
+                                    mBlurFilter->generateTemporaryImage(context, display,
+                                                                        mBlurFilter->scaleRadius(
+                                                                                radius),
                                                                         blurInput, blurRect);
                         }
                         for (const BlurRegion& region : regions) {
